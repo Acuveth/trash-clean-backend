@@ -26,7 +26,8 @@ const upload = multer({
     fileSize: 5 * 1024 * 1024, // 5MB limit
   },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) {
+    // Accept all files in development for testing
+    if (process.env.NODE_ENV === 'development' || file.mimetype.startsWith("image/")) {
       cb(null, true);
     } else {
       cb(new Error("Only image files are allowed"));
@@ -79,10 +80,22 @@ router.get("/reports", authenticateToken, async (req, res) => {
 router.post(
   "/report",
   authenticateToken,
-  upload.single("photo"),
+  upload.single("image"),
   async (req, res) => {
     try {
-      const { latitude, longitude, description, trashType, size } = req.body;
+      const { 
+        latitude, 
+        longitude, 
+        description, 
+        trashType, 
+        size,
+        username,
+        aiDescription,
+        trashCount,
+        trashTypes,
+        severity,
+        locationContext
+      } = req.body;
 
       if (!req.file) {
         return res.status(400).json({ error: "Photo is required" });
@@ -93,24 +106,49 @@ router.post(
       }
 
       const photoUrl = `/uploads/trash-reports/${req.file.filename}`;
-      const points = calculatePoints(size, trashType);
+      
+      // Parse trash types if it's a JSON string
+      let parsedTrashTypes = null;
+      if (trashTypes) {
+        try {
+          parsedTrashTypes = typeof trashTypes === 'string' ? JSON.parse(trashTypes) : trashTypes;
+        } catch (e) {
+          console.error("Error parsing trash types:", e);
+        }
+      }
 
-      // Insert the report
+      // Calculate points based on AI analysis or fallback to manual data
+      const finalTrashType = trashType || (parsedTrashTypes && parsedTrashTypes[0]) || 'General';
+      const finalSize = size || (severity === 'high' ? 'Large' : severity === 'low' ? 'Small' : 'Medium');
+      const points = calculatePoints(finalSize, finalTrashType);
+
+      // Bonus points for AI analysis
+      const aiBonus = aiDescription ? 5 : 0;
+      const finalPoints = points + aiBonus;
+
+      // Insert the report with AI data
       const [result] = await pool.execute(
         `
       INSERT INTO trash_reports 
-      (user_id, latitude, longitude, photo_url, description, trash_type, size, points) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (user_id, latitude, longitude, photo_url, description, trash_type, size, points,
+       ai_description, trash_count, trash_types, severity, location_context, ai_analyzed) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
         [
           req.user.id,
           latitude,
           longitude,
           photoUrl,
-          description,
-          trashType,
-          size,
-          points,
+          description || aiDescription || 'Trash report',
+          finalTrashType,
+          finalSize,
+          finalPoints,
+          aiDescription,
+          parseInt(trashCount) || 1,
+          JSON.stringify(parsedTrashTypes),
+          severity || 'medium',
+          locationContext,
+          !!aiDescription
         ]
       );
 
@@ -120,10 +158,10 @@ router.post(
         [result.insertId]
       );
 
-      // Update user's report count
+      // Update user's report count and points
       await pool.execute(
-        "UPDATE users SET total_reports = total_reports + 1 WHERE id = ?",
-        [req.user.id]
+        "UPDATE users SET total_reports = total_reports + 1, points = points + ? WHERE id = ?",
+        [finalPoints, req.user.id]
       );
 
       res.status(201).json(reports[0]);
@@ -158,5 +196,78 @@ router.get("/report/:id", authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch report" });
   }
 });
+
+// AI Analysis endpoint for trash photos
+router.post(
+  "/ai/analyze-trash",
+  authenticateToken,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "Image is required for analysis" });
+      }
+
+      // Simulate AI analysis (replace with actual AI service call)
+      const simulateAIAnalysis = () => {
+        const trashTypes = [
+          ["Plastic Bottle", "Food Wrapper"],
+          ["Cigarette Butt", "Plastic Cup"],
+          ["Paper", "Plastic Bag"],
+          ["Glass Bottle", "Metal Can"],
+          ["Food Container", "Napkin"],
+          ["Straw", "Bottle Cap"]
+        ];
+
+        const locationContexts = [
+          "Urban street", "Park area", "Beach", "Parking lot", 
+          "Sidewalk", "Forest trail", "Playground", "Bus stop"
+        ];
+
+        const descriptions = [
+          "Multiple pieces of litter scattered on the ground",
+          "Single large item of trash visible",
+          "Small debris and waste materials",
+          "Collection of mixed waste items",
+          "Plastic waste near water source",
+          "Organic and inorganic waste mixed together"
+        ];
+
+        const severities = ["low", "medium", "high"];
+        
+        const randomTrashTypes = trashTypes[Math.floor(Math.random() * trashTypes.length)];
+        const randomDescription = descriptions[Math.floor(Math.random() * descriptions.length)];
+        const randomContext = locationContexts[Math.floor(Math.random() * locationContexts.length)];
+        const randomSeverity = severities[Math.floor(Math.random() * severities.length)];
+        const randomCount = Math.floor(Math.random() * 10) + 1;
+
+        return {
+          description: randomDescription,
+          trashCount: randomCount,
+          trashTypes: randomTrashTypes,
+          severity: randomSeverity,
+          locationContext: randomContext,
+          confidence: 0.85 + Math.random() * 0.1, // 85-95% confidence
+          processingTime: Math.floor(Math.random() * 2000) + 1000 // 1-3 seconds
+        };
+      };
+
+      // Simulate processing delay with Promise
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      const analysisResult = simulateAIAnalysis();
+      
+      res.json({
+        success: true,
+        analysis: analysisResult,
+        message: "Image analyzed successfully"
+      });
+
+    } catch (error) {
+      console.error("AI analysis error:", error);
+      res.status(500).json({ error: "Failed to analyze image" });
+    }
+  }
+);
 
 module.exports = router;

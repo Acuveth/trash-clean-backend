@@ -64,11 +64,18 @@ const initDatabase = async () => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         cleaned_at TIMESTAMP NULL,
         cleaned_by INT,
+        ai_description TEXT,
+        trash_count INT DEFAULT 1,
+        trash_types JSON,
+        severity VARCHAR(20) DEFAULT 'medium',
+        location_context VARCHAR(100),
+        ai_analyzed BOOLEAN DEFAULT FALSE,
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (cleaned_by) REFERENCES users(id),
         INDEX idx_status (status),
         INDEX idx_location (latitude, longitude),
-        INDEX idx_created_at (created_at)
+        INDEX idx_created_at (created_at),
+        INDEX idx_severity (severity)
       )
     `);
 
