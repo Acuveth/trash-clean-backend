@@ -5,7 +5,7 @@ require("dotenv").config();
 const pool = mysql.createPool({
   host: process.env.DB_HOST || "localhost",
   user: process.env.DB_USER || "root",
-  password: process.env.DB_PASSWORD || "",
+  password: process.env.DB_PASSWORD || "pass",
   database: process.env.DB_NAME || "trash_clean",
   port: process.env.DB_PORT || 3306,
   waitForConnections: true,
@@ -30,13 +30,17 @@ const initDatabase = async () => {
   try {
     console.log("🔧 Initializing MariaDB tables...");
 
-    // Users table
+    // Users table with OAuth2 support
     await pool.execute(`
       CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
         name VARCHAR(255) NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
+        password_hash VARCHAR(255),
+        oauth_provider VARCHAR(20),
+        oauth_id VARCHAR(100),
+        profile_picture_url TEXT,
+        is_oauth_user BOOLEAN DEFAULT FALSE,
         points INT DEFAULT 0,
         total_cleanups INT DEFAULT 0,
         total_reports INT DEFAULT 0,
@@ -44,7 +48,9 @@ const initDatabase = async () => {
         last_activity DATE,
         rank VARCHAR(50) DEFAULT 'Beginner',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_oauth_lookup (oauth_provider, oauth_id),
+        INDEX idx_email (email)
       )
     `);
 
@@ -79,7 +85,7 @@ const initDatabase = async () => {
       )
     `);
 
-    // Cleanup sessions table
+    // Cleanup sessions table with enhanced verification
     await pool.execute(`
       CREATE TABLE IF NOT EXISTS cleanup_sessions (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -89,16 +95,41 @@ const initDatabase = async () => {
         end_time TIMESTAMP NULL,
         start_latitude DECIMAL(10, 8) NOT NULL,
         start_longitude DECIMAL(11, 8) NOT NULL,
+        pickup_latitude DECIMAL(10, 8),
+        pickup_longitude DECIMAL(11, 8),
+        distance_from_trash DECIMAL(10, 2),
+        location_accuracy DECIMAL(10, 2),
         pickup_photo_url VARCHAR(500),
         after_photo_url VARCHAR(500),
+        verification_image_url VARCHAR(500),
         verification_score DECIMAL(3, 2),
+        ai_confidence DECIMAL(3, 2),
         points_earned INT DEFAULT 0,
         status VARCHAR(50) DEFAULT 'active',
+        verification_status VARCHAR(50),
+        verification_timestamp TIMESTAMP NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (trash_report_id) REFERENCES trash_reports(id),
         INDEX idx_user_id (user_id),
-        INDEX idx_status (status)
+        INDEX idx_status (status),
+        INDEX idx_verification_status (verification_status)
+      )
+    `);
+
+    // Pickup issues table
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS pickup_issues (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        trash_report_id INT,
+        user_id INT,
+        issue_type ENUM('not_found', 'already_cleaned', 'inaccessible', 'wrong_location', 'other') NOT NULL,
+        description TEXT,
+        reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (trash_report_id) REFERENCES trash_reports(id),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        INDEX idx_trash_report (trash_report_id),
+        INDEX idx_issue_type (issue_type)
       )
     `);
 

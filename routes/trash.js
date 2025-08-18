@@ -3,6 +3,8 @@ const multer = require("multer");
 const path = require("path");
 const pool = require("../config/database");
 const { authenticateToken } = require("../middleware/auth");
+const { calculateDistance, validateCoordinates, checkProximity } = require("../utils/location");
+const { verifyPickupPhoto, generateImageHash, processImage, checkRateLimit } = require("../utils/verification");
 
 const router = express.Router();
 
@@ -269,5 +271,325 @@ router.post(
     }
   }
 );
+
+// Verify pickup with photo evidence
+router.post("/verify-pickup", authenticateToken, upload.single("verificationImage"), async (req, res) => {
+  try {
+    const {
+      trashId,
+      userLatitude,
+      userLongitude,
+      locationAccuracy,
+      trashLatitude,
+      trashLongitude,
+      distanceFromTrash,
+      timestamp
+    } = req.body;
+
+    // Validate required fields
+    if (!trashId || !userLatitude || !userLongitude || !req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: trashId, location, or verification image"
+      });
+    }
+
+    // Validate coordinates
+    if (!validateCoordinates(userLatitude, userLongitude)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid GPS coordinates"
+      });
+    }
+
+    // Check rate limiting
+    const [recentPickups] = await pool.execute(
+      "SELECT created_at FROM cleanup_sessions WHERE user_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)",
+      [req.user.id]
+    );
+
+    const rateCheck = checkRateLimit(recentPickups, 10);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        success: false,
+        message: `Too many pickup attempts. ${rateCheck.remaining} remaining this hour.`
+      });
+    }
+
+    // Verify trash exists and is not already picked up
+    const [trashReports] = await pool.execute(
+      "SELECT * FROM trash_reports WHERE id = ?",
+      [trashId]
+    );
+
+    if (trashReports.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Trash item not found"
+      });
+    }
+
+    const trash = trashReports[0];
+    if (trash.status === 'cleaned' || trash.cleaned_by) {
+      return res.status(409).json({
+        success: false,
+        message: "This trash has already been picked up"
+      });
+    }
+
+    // Verify location proximity (50m radius)
+    const proximity = checkProximity(
+      parseFloat(userLatitude),
+      parseFloat(userLongitude),
+      trash.latitude,
+      trash.longitude,
+      50
+    );
+
+    if (!proximity.isWithinRadius) {
+      return res.status(422).json({
+        success: false,
+        message: `Too far from trash location. Distance: ${proximity.distance}m (max: 50m)`
+      });
+    }
+
+    // Process and verify the image
+    const processedImage = await processImage(req.file.buffer);
+    const imageHash = generateImageHash(processedImage);
+    
+    // Check for duplicate images (fraud prevention)
+    const [duplicateImages] = await pool.execute(
+      "SELECT id FROM cleanup_sessions WHERE verification_image_url LIKE ?",
+      [`%${imageHash.substring(0, 16)}%`]
+    );
+
+    if (duplicateImages.length > 0) {
+      return res.status(422).json({
+        success: false,
+        message: "This image has been used before. Please take a new photo."
+      });
+    }
+
+    // AI verification of pickup photo
+    const verification = await verifyPickupPhoto(
+      processedImage,
+      trash.description || trash.ai_description
+    );
+
+    if (!verification.isHoldingTrash || verification.confidence < 0.7) {
+      return res.status(422).json({
+        success: false,
+        message: "Photo verification failed. Please ensure you're holding the trash item clearly in the photo."
+      });
+    }
+
+    // Save verification image (in production, upload to cloud storage)
+    const verificationImagePath = `/uploads/verification/${Date.now()}-${imageHash.substring(0, 8)}.jpg`;
+    
+    // Update trash status and create cleanup session
+    await pool.execute("START TRANSACTION");
+
+    try {
+      // Update trash report
+      await pool.execute(
+        `UPDATE trash_reports 
+         SET status = 'cleaned', cleaned_by = ?, cleaned_at = NOW() 
+         WHERE id = ?`,
+        [req.user.id, trashId]
+      );
+
+      // Create cleanup session
+      const [sessionResult] = await pool.execute(
+        `INSERT INTO cleanup_sessions 
+         (user_id, trash_report_id, start_time, start_latitude, start_longitude,
+          pickup_latitude, pickup_longitude, distance_from_trash, location_accuracy,
+          verification_image_url, verification_score, ai_confidence, points_earned,
+          status, verification_status, verification_timestamp)
+         VALUES (?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'verified', NOW())`,
+        [
+          req.user.id,
+          trashId,
+          userLatitude,
+          userLongitude,
+          userLatitude,
+          userLongitude,
+          proximity.distance,
+          locationAccuracy || 10,
+          verificationImagePath,
+          verification.confidence,
+          verification.confidence,
+          trash.points || 10
+        ]
+      );
+
+      // Award points to user
+      await pool.execute(
+        "UPDATE users SET points = points + ?, total_cleanups = total_cleanups + 1 WHERE id = ?",
+        [trash.points || 10, req.user.id]
+      );
+
+      await pool.execute("COMMIT");
+
+      res.json({
+        success: true,
+        message: "Pickup verified successfully",
+        pointsEarned: trash.points || 10,
+        matchConfidence: verification.confidence,
+        trashId: trashId,
+        userId: req.user.id,
+        sessionId: sessionResult.insertId
+      });
+
+    } catch (error) {
+      await pool.execute("ROLLBACK");
+      throw error;
+    }
+
+  } catch (error) {
+    console.error("Pickup verification error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify pickup"
+    });
+  }
+});
+
+// Get nearby trash items
+router.get("/nearby", authenticateToken, async (req, res) => {
+  try {
+    const { latitude, longitude, radius = 1000 } = req.query;
+
+    if (!latitude || !longitude) {
+      return res.status(400).json({
+        success: false,
+        message: "Latitude and longitude are required"
+      });
+    }
+
+    if (!validateCoordinates(parseFloat(latitude), parseFloat(longitude))) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid GPS coordinates"
+      });
+    }
+
+    // Get trash reports within radius using Haversine formula
+    const [trashItems] = await pool.execute(`
+      SELECT 
+        id,
+        latitude,
+        longitude,
+        description,
+        ai_description,
+        photo_url,
+        trash_type,
+        size,
+        points,
+        created_at,
+        severity,
+        location_context,
+        (6371000 * ACOS(
+          COS(RADIANS(?)) * COS(RADIANS(latitude)) * 
+          COS(RADIANS(longitude) - RADIANS(?)) + 
+          SIN(RADIANS(?)) * SIN(RADIANS(latitude))
+        )) AS distance
+      FROM trash_reports 
+      WHERE status = 'pending'
+        AND (6371000 * ACOS(
+          COS(RADIANS(?)) * COS(RADIANS(latitude)) * 
+          COS(RADIANS(longitude) - RADIANS(?)) + 
+          SIN(RADIANS(?)) * SIN(RADIANS(latitude))
+        )) <= ?
+      ORDER BY distance ASC
+      LIMIT 50
+    `, [
+      latitude, longitude, latitude,
+      latitude, longitude, latitude, radius
+    ]);
+
+    const items = trashItems.map(item => ({
+      id: item.id,
+      description: item.ai_description || item.description,
+      location: {
+        latitude: item.latitude,
+        longitude: item.longitude
+      },
+      distance: Math.round(item.distance),
+      points: item.points,
+      reportedAt: item.created_at,
+      imageUrl: item.photo_url,
+      trashType: item.trash_type,
+      size: item.size,
+      severity: item.severity,
+      locationContext: item.location_context
+    }));
+
+    res.json({
+      success: true,
+      items
+    });
+
+  } catch (error) {
+    console.error("Nearby trash fetch error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch nearby trash"
+    });
+  }
+});
+
+// Report issues with trash pickup
+router.post("/:trashId/report-issue", authenticateToken, async (req, res) => {
+  try {
+    const { trashId } = req.params;
+    const { issueType, description } = req.body;
+
+    if (!issueType || !["not_found", "already_cleaned", "inaccessible", "wrong_location", "other"].includes(issueType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid issue type is required"
+      });
+    }
+
+    // Verify trash exists
+    const [trashReports] = await pool.execute(
+      "SELECT id FROM trash_reports WHERE id = ?",
+      [trashId]
+    );
+
+    if (trashReports.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Trash item not found"
+      });
+    }
+
+    // Insert issue report
+    await pool.execute(
+      "INSERT INTO pickup_issues (trash_report_id, user_id, issue_type, description) VALUES (?, ?, ?, ?)",
+      [trashId, req.user.id, issueType, description || null]
+    );
+
+    // If reported as already cleaned, mark the trash as such
+    if (issueType === "already_cleaned") {
+      await pool.execute(
+        "UPDATE trash_reports SET status = 'cleaned' WHERE id = ?",
+        [trashId]
+      );
+    }
+
+    res.json({
+      success: true,
+      message: "Issue reported successfully"
+    });
+
+  } catch (error) {
+    console.error("Issue report error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to report issue"
+    });
+  }
+});
 
 module.exports = router;
