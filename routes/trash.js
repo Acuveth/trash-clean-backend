@@ -5,6 +5,7 @@ const pool = require("../config/database");
 const { authenticateToken } = require("../middleware/auth");
 const { calculateDistance, validateCoordinates, checkProximity } = require("../utils/location");
 const { verifyPickupPhoto, generateImageHash, processImage, checkRateLimit } = require("../utils/verification");
+const { checkAndUnlockAchievements } = require("./achievements");
 
 const router = express.Router();
 
@@ -178,8 +179,18 @@ router.post(
         [finalPoints, req.user.id]
       );
 
+      // Check for achievements
+      const newAchievements = await checkAndUnlockAchievements(req.user.id, 'reports');
+      await checkAndUnlockAchievements(req.user.id, 'points');
+
       console.log("[TRASH/REPORT] Report created successfully:", result.insertId, "Points:", finalPoints);
-      res.status(201).json(reports[0]);
+      
+      const response = {
+        ...reports[0],
+        newAchievements: newAchievements
+      };
+      
+      res.status(201).json(response);
     } catch (error) {
       console.error("[TRASH/REPORT] Submission error:", error.message, error.stack);
       res.status(500).json({ error: "Failed to submit report" });
@@ -475,6 +486,10 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
 
       await pool.execute("COMMIT");
 
+      // Check for achievements (after commit)
+      const newAchievements = await checkAndUnlockAchievements(req.user.id, 'cleanups');
+      await checkAndUnlockAchievements(req.user.id, 'points');
+
       console.log("[TRASH/VERIFY-PICKUP] Pickup verified:", {
         trashId,
         userId: req.user.id,
@@ -489,7 +504,8 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
         matchConfidence: verification.confidence,
         trashId: trashId,
         userId: req.user.id,
-        sessionId: sessionResult.insertId
+        sessionId: sessionResult.insertId,
+        newAchievements: newAchievements
       });
 
     } catch (error) {

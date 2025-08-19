@@ -5,10 +5,14 @@ const rateLimit = require("express-rate-limit");
 const path = require("path");
 require("dotenv").config();
 
+// Initialize achievements on startup
+const { initializeAchievements } = require("./utils/achievements");
+
 // Import routes (we'll create these next)
 const authRoutes = require("./routes/auth");
 const trashRoutes = require("./routes/trash");
 const cleanupRoutes = require("./routes/cleanup");
+const achievementRoutes = require("./routes/achievements");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -58,6 +62,7 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/trash", trashRoutes);
 app.use("/api/cleanup", cleanupRoutes);
+app.use("/api/achievements", achievementRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {
@@ -69,9 +74,12 @@ app.use((error, req, res, next) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
+  
+  // Initialize achievements
+  await initializeAchievements();
 });
 
 module.exports = app;

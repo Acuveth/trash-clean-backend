@@ -3,6 +3,7 @@ const multer = require("multer");
 const path = require("path");
 const pool = require("../config/database");
 const { authenticateToken } = require("../middleware/auth");
+const { checkAndUnlockAchievements } = require("./achievements");
 
 const router = express.Router();
 
@@ -302,6 +303,10 @@ router.post("/complete", authenticateToken, async (req, res) => {
       [verificationResult.pointsEarned, req.user.id]
     );
 
+    // Check for achievements
+    const newAchievements = await checkAndUnlockAchievements(req.user.id, 'cleanups');
+    await checkAndUnlockAchievements(req.user.id, 'points');
+
     console.log("[CLEANUP/COMPLETE] Cleanup completed successfully:", {
       sessionId,
       trashId: session.trash_report_id,
@@ -312,6 +317,7 @@ router.post("/complete", authenticateToken, async (req, res) => {
       success: true,
       pointsEarned: verificationResult.pointsEarned,
       trashId: session.trash_report_id,
+      newAchievements: newAchievements
     });
   } catch (error) {
     console.error("[CLEANUP/COMPLETE] Error:", error.message);
