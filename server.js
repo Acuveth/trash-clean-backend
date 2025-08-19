@@ -13,6 +13,26 @@ const cleanupRoutes = require("./routes/cleanup");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Request logging middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  const originalSend = res.send;
+  
+  res.send = function(body) {
+    const duration = Date.now() - start;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} - ${res.statusCode} (${duration}ms)`);
+    
+    if (res.statusCode >= 400) {
+      console.log(`[ERROR] Request body:`, req.body);
+      console.log(`[ERROR] Response:`, typeof body === 'string' ? body : JSON.stringify(body));
+    }
+    
+    return originalSend.call(this, body);
+  };
+  
+  next();
+});
+
 // Middleware
 app.use(helmet());
 app.use(cors());
@@ -41,7 +61,10 @@ app.use("/api/cleanup", cleanupRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {
-  console.error("Error:", error);
+  console.error(`[SERVER ERROR] ${error.name}: ${error.message}`);
+  console.error(`[SERVER ERROR] Request: ${req.method} ${req.originalUrl}`);
+  console.error(`[SERVER ERROR] Body:`, req.body);
+  console.error(`[SERVER ERROR] Stack:`, error.stack);
   res.status(500).json({ error: "Internal server error" });
 });
 

@@ -62,6 +62,7 @@ const calculatePoints = (size, trashType) => {
 
 // Get all trash reports
 router.get("/reports", authenticateToken, async (req, res) => {
+  console.log("[TRASH/REPORTS] Fetching all reports for user:", req.user?.id);
   try {
     const [reports] = await pool.execute(`
       SELECT tr.*, u.name as reporter_name 
@@ -71,9 +72,10 @@ router.get("/reports", authenticateToken, async (req, res) => {
       ORDER BY tr.created_at DESC
     `);
 
+    console.log("[TRASH/REPORTS] Found", reports.length, "reports");
     res.json(reports);
   } catch (error) {
-    console.error("Fetch reports error:", error);
+    console.error("[TRASH/REPORTS] Fetch error:", error.message, error.stack);
     res.status(500).json({ error: "Failed to fetch reports" });
   }
 });
@@ -84,6 +86,14 @@ router.post(
   authenticateToken,
   upload.single("image"),
   async (req, res) => {
+    console.log("[TRASH/REPORT] New report submission:", {
+      body: req.body,
+      hasFile: !!req.file,
+      fileName: req.file?.filename,
+      fileSize: req.file?.size,
+      userId: req.user?.id
+    });
+    
     try {
       const { 
         latitude, 
@@ -100,10 +110,12 @@ router.post(
       } = req.body;
 
       if (!req.file) {
+        console.log("[TRASH/REPORT] No photo uploaded");
         return res.status(400).json({ error: "Photo is required" });
       }
 
       if (!latitude || !longitude) {
+        console.log("[TRASH/REPORT] Missing location data:", { latitude, longitude });
         return res.status(400).json({ error: "Location is required" });
       }
 
@@ -166,9 +178,10 @@ router.post(
         [finalPoints, req.user.id]
       );
 
+      console.log("[TRASH/REPORT] Report created successfully:", result.insertId, "Points:", finalPoints);
       res.status(201).json(reports[0]);
     } catch (error) {
-      console.error("Report submission error:", error);
+      console.error("[TRASH/REPORT] Submission error:", error.message, error.stack);
       res.status(500).json({ error: "Failed to submit report" });
     }
   }
@@ -176,8 +189,10 @@ router.post(
 
 // Get specific trash report
 router.get("/report/:id", authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  console.log("[TRASH/REPORT/:id] Fetching report:", id);
+  
   try {
-    const { id } = req.params;
     const [reports] = await pool.execute(
       `
       SELECT tr.*, u.name as reporter_name 
@@ -189,12 +204,14 @@ router.get("/report/:id", authenticateToken, async (req, res) => {
     );
 
     if (reports.length === 0) {
+      console.log("[TRASH/REPORT/:id] Report not found:", id);
       return res.status(404).json({ error: "Report not found" });
     }
 
+    console.log("[TRASH/REPORT/:id] Report found:", id);
     res.json(reports[0]);
   } catch (error) {
-    console.error("Fetch report error:", error);
+    console.error("[TRASH/REPORT/:id] Fetch error:", error.message);
     res.status(500).json({ error: "Failed to fetch report" });
   }
 });
@@ -205,8 +222,15 @@ router.post(
   authenticateToken,
   upload.single("image"),
   async (req, res) => {
+    console.log("[TRASH/AI] Analysis requested:", {
+      hasFile: !!req.file,
+      fileName: req.file?.filename,
+      fileSize: req.file?.size
+    });
+    
     try {
       if (!req.file) {
+        console.log("[TRASH/AI] No image provided for analysis");
         return res.status(400).json({ error: "Image is required for analysis" });
       }
 
@@ -259,6 +283,7 @@ router.post(
       
       const analysisResult = simulateAIAnalysis();
       
+      console.log("[TRASH/AI] Analysis complete:", analysisResult);
       res.json({
         success: true,
         analysis: analysisResult,
@@ -266,7 +291,7 @@ router.post(
       });
 
     } catch (error) {
-      console.error("AI analysis error:", error);
+      console.error("[TRASH/AI] Analysis error:", error.message);
       res.status(500).json({ error: "Failed to analyze image" });
     }
   }
@@ -274,6 +299,12 @@ router.post(
 
 // Verify pickup with photo evidence
 router.post("/verify-pickup", authenticateToken, upload.single("verificationImage"), async (req, res) => {
+  console.log("[TRASH/VERIFY-PICKUP] Verification request:", {
+    body: req.body,
+    hasFile: !!req.file,
+    userId: req.user?.id
+  });
+  
   try {
     const {
       trashId,
@@ -288,6 +319,12 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
 
     // Validate required fields
     if (!trashId || !userLatitude || !userLongitude || !req.file) {
+      console.log("[TRASH/VERIFY-PICKUP] Missing fields:", {
+        trashId: !trashId ? "missing" : "present",
+        userLatitude: !userLatitude ? "missing" : "present",
+        userLongitude: !userLongitude ? "missing" : "present",
+        file: !req.file ? "missing" : "present"
+      });
       return res.status(400).json({
         success: false,
         message: "Missing required fields: trashId, location, or verification image"
@@ -296,6 +333,7 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
 
     // Validate coordinates
     if (!validateCoordinates(userLatitude, userLongitude)) {
+      console.log("[TRASH/VERIFY-PICKUP] Invalid coordinates:", { userLatitude, userLongitude });
       return res.status(400).json({
         success: false,
         message: "Invalid GPS coordinates"
@@ -323,6 +361,7 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
     );
 
     if (trashReports.length === 0) {
+      console.log("[TRASH/VERIFY-PICKUP] Trash not found:", trashId);
       return res.status(404).json({
         success: false,
         message: "Trash item not found"
@@ -331,6 +370,7 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
 
     const trash = trashReports[0];
     if (trash.status === 'cleaned' || trash.cleaned_by) {
+      console.log("[TRASH/VERIFY-PICKUP] Trash already cleaned:", trashId);
       return res.status(409).json({
         success: false,
         message: "This trash has already been picked up"
@@ -347,6 +387,11 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
     );
 
     if (!proximity.isWithinRadius) {
+      console.log("[TRASH/VERIFY-PICKUP] Too far from trash:", {
+        distance: proximity.distance,
+        maxDistance: 50,
+        trashId
+      });
       return res.status(422).json({
         success: false,
         message: `Too far from trash location. Distance: ${proximity.distance}m (max: 50m)`
@@ -430,6 +475,13 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
 
       await pool.execute("COMMIT");
 
+      console.log("[TRASH/VERIFY-PICKUP] Pickup verified:", {
+        trashId,
+        userId: req.user.id,
+        points: trash.points || 10,
+        sessionId: sessionResult.insertId
+      });
+      
       res.json({
         success: true,
         message: "Pickup verified successfully",
@@ -446,7 +498,7 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
     }
 
   } catch (error) {
-    console.error("Pickup verification error:", error);
+    console.error("[TRASH/VERIFY-PICKUP] Error:", error.message, error.stack);
     res.status(500).json({
       success: false,
       message: "Failed to verify pickup"
@@ -456,10 +508,13 @@ router.post("/verify-pickup", authenticateToken, upload.single("verificationImag
 
 // Get nearby trash items
 router.get("/nearby", authenticateToken, async (req, res) => {
+  const { latitude, longitude, radius = 1000 } = req.query;
+  console.log("[TRASH/NEARBY] Request:", { latitude, longitude, radius });
+  
   try {
-    const { latitude, longitude, radius = 1000 } = req.query;
 
     if (!latitude || !longitude) {
+      console.log("[TRASH/NEARBY] Missing coordinates");
       return res.status(400).json({
         success: false,
         message: "Latitude and longitude are required"
@@ -467,6 +522,7 @@ router.get("/nearby", authenticateToken, async (req, res) => {
     }
 
     if (!validateCoordinates(parseFloat(latitude), parseFloat(longitude))) {
+      console.log("[TRASH/NEARBY] Invalid coordinates:", { latitude, longitude });
       return res.status(400).json({
         success: false,
         message: "Invalid GPS coordinates"
@@ -524,13 +580,14 @@ router.get("/nearby", authenticateToken, async (req, res) => {
       locationContext: item.location_context
     }));
 
+    console.log("[TRASH/NEARBY] Found", items.length, "items within", radius, "meters");
     res.json({
       success: true,
       items
     });
 
   } catch (error) {
-    console.error("Nearby trash fetch error:", error);
+    console.error("[TRASH/NEARBY] Error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to fetch nearby trash"
@@ -540,11 +597,14 @@ router.get("/nearby", authenticateToken, async (req, res) => {
 
 // Report issues with trash pickup
 router.post("/:trashId/report-issue", authenticateToken, async (req, res) => {
+  const { trashId } = req.params;
+  const { issueType, description } = req.body;
+  console.log("[TRASH/REPORT-ISSUE] Issue reported:", { trashId, issueType, description });
+  
   try {
-    const { trashId } = req.params;
-    const { issueType, description } = req.body;
 
     if (!issueType || !["not_found", "already_cleaned", "inaccessible", "wrong_location", "other"].includes(issueType)) {
+      console.log("[TRASH/REPORT-ISSUE] Invalid issue type:", issueType);
       return res.status(400).json({
         success: false,
         message: "Valid issue type is required"
@@ -558,6 +618,7 @@ router.post("/:trashId/report-issue", authenticateToken, async (req, res) => {
     );
 
     if (trashReports.length === 0) {
+      console.log("[TRASH/REPORT-ISSUE] Trash not found:", trashId);
       return res.status(404).json({
         success: false,
         message: "Trash item not found"
@@ -578,13 +639,14 @@ router.post("/:trashId/report-issue", authenticateToken, async (req, res) => {
       );
     }
 
+    console.log("[TRASH/REPORT-ISSUE] Issue reported successfully for trash:", trashId);
     res.json({
       success: true,
       message: "Issue reported successfully"
     });
 
   } catch (error) {
-    console.error("Issue report error:", error);
+    console.error("[TRASH/REPORT-ISSUE] Error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to report issue"

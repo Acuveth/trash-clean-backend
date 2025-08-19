@@ -87,11 +87,14 @@ const simulateAIVerification = async () => {
 
 // Get nearby trash for cleanup (using Haversine formula)
 router.get("/nearby", authenticateToken, async (req, res) => {
+  const { lat, lng } = req.query;
+  console.log("[CLEANUP/NEARBY] Request:", { lat, lng });
+  
   try {
-    const { lat, lng } = req.query;
     const radius = 5; // 5km radius
 
     if (!lat || !lng) {
+      console.log("[CLEANUP/NEARBY] Missing coordinates");
       return res
         .status(400)
         .json({ error: "Latitude and longitude are required" });
@@ -113,17 +116,25 @@ router.get("/nearby", authenticateToken, async (req, res) => {
       [lat, lng, lat, radius]
     );
 
+    console.log("[CLEANUP/NEARBY] Found", reports.length, "reports");
     res.json(reports);
   } catch (error) {
-    console.error("Fetch nearby trash error:", error);
+    console.error("[CLEANUP/NEARBY] Error:", error.message);
     res.status(500).json({ error: "Failed to fetch nearby trash" });
   }
 });
 
 // Start cleanup session
 router.post("/start", authenticateToken, async (req, res) => {
+  const { trashId, startLocation, startTime } = req.body;
+  console.log("[CLEANUP/START] Starting session:", {
+    trashId,
+    startLocation,
+    startTime,
+    userId: req.user?.id
+  });
+  
   try {
-    const { trashId, startLocation, startTime } = req.body;
 
     // Verify trash exists and is available
     const [trashReports] = await pool.execute(
@@ -132,6 +143,7 @@ router.post("/start", authenticateToken, async (req, res) => {
     );
 
     if (trashReports.length === 0) {
+      console.log("[CLEANUP/START] Trash not available:", trashId);
       return res.status(400).json({ error: "Trash not available for cleanup" });
     }
 
@@ -146,6 +158,11 @@ router.post("/start", authenticateToken, async (req, res) => {
     );
 
     if (distance > 50) {
+      console.log("[CLEANUP/START] Too far from trash:", {
+        distance,
+        maxDistance: 50,
+        trashId
+      });
       return res.status(400).json({ error: "Too far from trash location" });
     }
 
@@ -171,9 +188,10 @@ router.post("/start", authenticateToken, async (req, res) => {
       [result.insertId]
     );
 
+    console.log("[CLEANUP/START] Session created:", result.insertId);
     res.json(sessions[0]);
   } catch (error) {
-    console.error("Start cleanup error:", error);
+    console.error("[CLEANUP/START] Error:", error.message);
     res.status(500).json({ error: "Failed to start cleanup" });
   }
 });
@@ -187,21 +205,32 @@ router.post(
     { name: "afterPhoto", maxCount: 1 },
   ]),
   async (req, res) => {
+    console.log("[CLEANUP/VERIFY] Photo verification:", {
+      body: req.body,
+      hasPickupPhoto: !!req.files?.pickupPhoto,
+      hasAfterPhoto: !!req.files?.afterPhoto
+    });
+    
     try {
       const { originalPhotoUrl, latitude, longitude } = req.body;
 
       if (!req.files.pickupPhoto || !req.files.afterPhoto) {
+        console.log("[CLEANUP/VERIFY] Missing photos:", {
+          hasPickupPhoto: !!req.files?.pickupPhoto,
+          hasAfterPhoto: !!req.files?.afterPhoto
+        });
         return res.status(400).json({ error: "Both photos are required" });
       }
 
-      console.log("Processing AI verification...");
+      console.log("[CLEANUP/VERIFY] Processing AI verification...");
 
       // Simulate AI verification
       const verificationResult = await simulateAIVerification();
 
+      console.log("[CLEANUP/VERIFY] Verification result:", verificationResult);
       res.json(verificationResult);
     } catch (error) {
-      console.error("Photo verification error:", error);
+      console.error("[CLEANUP/VERIFY] Error:", error.message);
       res.status(500).json({ error: "Failed to verify photos" });
     }
   }
@@ -209,10 +238,18 @@ router.post(
 
 // Complete cleanup
 router.post("/complete", authenticateToken, async (req, res) => {
+  const { sessionId, endTime, verificationResult } = req.body;
+  console.log("[CLEANUP/COMPLETE] Completing cleanup:", {
+    sessionId,
+    endTime,
+    verified: verificationResult?.verified,
+    points: verificationResult?.pointsEarned
+  });
+  
   try {
-    const { sessionId, endTime, verificationResult } = req.body;
 
     if (!verificationResult || !verificationResult.verified) {
+      console.log("[CLEANUP/COMPLETE] Cleanup not verified:", verificationResult);
       return res.status(400).json({ error: "Cleanup not verified" });
     }
 
@@ -223,6 +260,7 @@ router.post("/complete", authenticateToken, async (req, res) => {
     );
 
     if (sessions.length === 0) {
+      console.log("[CLEANUP/COMPLETE] Session not found:", sessionId);
       return res.status(404).json({ error: "Session not found" });
     }
 
@@ -264,13 +302,19 @@ router.post("/complete", authenticateToken, async (req, res) => {
       [verificationResult.pointsEarned, req.user.id]
     );
 
+    console.log("[CLEANUP/COMPLETE] Cleanup completed successfully:", {
+      sessionId,
+      trashId: session.trash_report_id,
+      pointsEarned: verificationResult.pointsEarned
+    });
+    
     res.json({
       success: true,
       pointsEarned: verificationResult.pointsEarned,
       trashId: session.trash_report_id,
     });
   } catch (error) {
-    console.error("Complete cleanup error:", error);
+    console.error("[CLEANUP/COMPLETE] Error:", error.message);
     res.status(500).json({ error: "Failed to complete cleanup" });
   }
 });

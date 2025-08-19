@@ -9,15 +9,29 @@ const router = express.Router();
 
 // Register new user
 router.post("/register", async (req, res) => {
+  console.log("[AUTH/REGISTER] Request received:", {
+    body: req.body,
+    headers: req.headers['content-type'],
+    hasEmail: !!req.body.email,
+    hasName: !!req.body.name,
+    hasPassword: !!req.body.password
+  });
+  
   try {
     const { email, name, password } = req.body;
 
     // Basic validation
     if (!email || !name || !password) {
+      console.log("[AUTH/REGISTER] Validation failed - missing fields:", {
+        email: !email ? "missing" : "present",
+        name: !name ? "missing" : "present",
+        password: !password ? "missing" : "present"
+      });
       return res.status(400).json({ error: "All fields are required" });
     }
 
     if (password.length < 6) {
+      console.log("[AUTH/REGISTER] Password too short:", password.length, "characters");
       return res
         .status(400)
         .json({ error: "Password must be at least 6 characters" });
@@ -29,6 +43,7 @@ router.post("/register", async (req, res) => {
       [email]
     );
     if (existingUsers.length > 0) {
+      console.log("[AUTH/REGISTER] User already exists:", email);
       return res.status(400).json({ error: "User already exists" });
     }
 
@@ -54,6 +69,7 @@ router.post("/register", async (req, res) => {
       process.env.JWT_SECRET || "default_secret"
     );
 
+    console.log("[AUTH/REGISTER] Registration successful for:", email);
     res.status(201).json({
       user: {
         id: user.id,
@@ -64,18 +80,28 @@ router.post("/register", async (req, res) => {
       token,
     });
   } catch (error) {
-    console.error("Registration error:", error);
+    console.error("[AUTH/REGISTER] Registration error:", error.message, error.stack);
     res.status(500).json({ error: "Registration failed" });
   }
 });
 
 // Login user
 router.post("/login", async (req, res) => {
+  console.log("[AUTH/LOGIN] Request received:", {
+    body: req.body,
+    hasEmail: !!req.body.email,
+    hasPassword: !!req.body.password
+  });
+  
   try {
     const { email, password } = req.body;
 
     // Basic validation
     if (!email || !password) {
+      console.log("[AUTH/LOGIN] Validation failed - missing fields:", {
+        email: !email ? "missing" : "present",
+        password: !password ? "missing" : "present"
+      });
       return res.status(400).json({ error: "Email and password are required" });
     }
 
@@ -84,6 +110,7 @@ router.post("/login", async (req, res) => {
       email,
     ]);
     if (users.length === 0) {
+      console.log("[AUTH/LOGIN] User not found:", email);
       return res.status(400).json({ error: "Invalid credentials" });
     }
 
@@ -92,6 +119,7 @@ router.post("/login", async (req, res) => {
     // Check password
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
     if (!isValidPassword) {
+      console.log("[AUTH/LOGIN] Invalid password for:", email);
       return res.status(400).json({ error: "Invalid credentials" });
     }
 
@@ -100,6 +128,7 @@ router.post("/login", async (req, res) => {
       process.env.JWT_SECRET || "default_secret"
     );
 
+    console.log("[AUTH/LOGIN] Login successful for:", email);
     res.json({
       user: {
         id: user.id,
@@ -110,24 +139,32 @@ router.post("/login", async (req, res) => {
       token,
     });
   } catch (error) {
-    console.error("Login error:", error);
+    console.error("[AUTH/LOGIN] Login error:", error.message, error.stack);
     res.status(500).json({ error: "Login failed" });
   }
 });
 
 // Get current user info
 router.get("/me", authenticateToken, (req, res) => {
+  console.log("[AUTH/ME] User info requested for ID:", req.user?.id);
   res.json(req.user);
 });
 
 // Google OAuth2 authentication endpoint
 router.post("/oauth", async (req, res) => {
+  console.log("[AUTH/OAUTH] Request received:", {
+    provider: req.body.provider,
+    hasAccessToken: !!req.body.accessToken,
+    userInfo: req.body.userInfo ? { email: req.body.userInfo.email, name: req.body.userInfo.name } : null
+  });
+  
   try {
     const { provider, accessToken, userInfo } = req.body;
 
     // Validate request data
     const validation = validateOAuthRequest(req.body);
     if (!validation.isValid) {
+      console.log("[AUTH/OAUTH] Validation failed:", validation.errors);
       return res.status(400).json({
         success: false,
         message: "Invalid request data",
@@ -138,11 +175,13 @@ router.post("/oauth", async (req, res) => {
     // Verify token with OAuth provider
     const verifiedUserInfo = await verifyOAuthToken(provider, accessToken, userInfo);
     if (!verifiedUserInfo) {
+      console.log("[AUTH/OAUTH] Token verification failed for provider:", provider);
       return res.status(401).json({
         success: false,
         message: "Invalid OAuth token or user information"
       });
     }
+    console.log("[AUTH/OAUTH] Token verified for user:", verifiedUserInfo.email);
 
     // Check for rate limiting (optional - prevent OAuth abuse)
     const [recentAttempts] = await pool.execute(
@@ -276,7 +315,7 @@ router.post("/oauth", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("OAuth authentication error:", error);
+    console.error("[AUTH/OAUTH] Authentication error:", error.message, error.stack);
     res.status(500).json({
       success: false,
       message: "Authentication failed",
@@ -287,10 +326,15 @@ router.post("/oauth", async (req, res) => {
 
 // Token refresh endpoint
 router.post("/refresh", async (req, res) => {
+  console.log("[AUTH/REFRESH] Token refresh requested:", {
+    hasRefreshToken: !!req.body.refreshToken
+  });
+  
   try {
     const { refreshToken } = req.body;
 
     if (!refreshToken) {
+      console.log("[AUTH/REFRESH] No refresh token provided");
       return res.status(400).json({
         success: false,
         message: "Refresh token is required"
@@ -310,6 +354,7 @@ router.post("/refresh", async (req, res) => {
     );
 
     if (users.length === 0) {
+      console.log("[AUTH/REFRESH] User not found for token");
       return res.status(401).json({
         success: false,
         message: "Invalid refresh token"
@@ -329,13 +374,14 @@ router.post("/refresh", async (req, res) => {
       { expiresIn: '24h' }
     );
 
+    console.log("[AUTH/REFRESH] Token refreshed successfully for user:", user.id);
     res.json({
       success: true,
       accessToken: newAccessToken
     });
 
   } catch (error) {
-    console.error("Token refresh error:", error);
+    console.error("[AUTH/REFRESH] Token refresh error:", error.message);
     res.status(401).json({
       success: false,
       message: "Invalid refresh token"
