@@ -46,7 +46,7 @@ const initDatabase = async () => {
         total_reports INT DEFAULT 0,
         streak_days INT DEFAULT 0,
         last_activity DATE,
-        rank VARCHAR(50) DEFAULT 'Beginner',
+        \`rank\` VARCHAR(50) DEFAULT 'Beginner',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_oauth_lookup (oauth_provider, oauth_id),
@@ -142,6 +142,23 @@ const initDatabase = async () => {
         earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id),
         UNIQUE KEY unique_user_achievement (user_id, achievement_type)
+      )
+    `);
+
+    // Friends table for leaderboard functionality
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS friends (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        friend_id INT NOT NULL,
+        status ENUM('pending', 'accepted', 'blocked') DEFAULT 'accepted',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (friend_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE KEY unique_friendship (user_id, friend_id),
+        INDEX idx_user_id (user_id),
+        INDEX idx_friend_id (friend_id),
+        INDEX idx_status (status)
       )
     `);
 

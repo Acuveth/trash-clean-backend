@@ -206,9 +206,7 @@ router.get("/me", authenticateToken, async (req, res) => {
   try {
     // Get fresh user data from database
     const [users] = await pool.execute(
-      `SELECT id, email, name, profile_picture_url, bio, location, points, 
-       total_cleanups, total_reports, rank, streak_days, is_oauth_user, 
-       oauth_provider, created_at, updated_at FROM users WHERE id = ?`,
+      `SELECT id, email, name, profile_picture_url, bio, location, points, total_cleanups, total_reports, streak_days, is_oauth_user, oauth_provider, created_at, updated_at FROM users WHERE id = ?`,
       [req.user.id]
     );
 
@@ -227,7 +225,6 @@ router.get("/me", authenticateToken, async (req, res) => {
       points: user.points || 0,
       totalCleanups: user.total_cleanups || 0,
       totalReports: user.total_reports || 0,
-      rank: user.rank || 'Beginner',
       streakDays: user.streak_days || 0,
       isOauthUser: user.is_oauth_user || false,
       oauthProvider: user.oauth_provider,

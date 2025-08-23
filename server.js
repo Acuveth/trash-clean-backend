@@ -13,6 +13,8 @@ const authRoutes = require("./routes/auth");
 const trashRoutes = require("./routes/trash");
 const cleanupRoutes = require("./routes/cleanup");
 const achievementRoutes = require("./routes/achievements");
+const leaderboardRoutes = require("./routes/leaderboard");
+const friendsRoutes = require("./routes/friends");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -63,6 +65,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/trash", trashRoutes);
 app.use("/api/cleanup", cleanupRoutes);
 app.use("/api/achievements", achievementRoutes);
+app.use("/api/leaderboard", leaderboardRoutes);
+app.use("/api/users/friends", friendsRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {
